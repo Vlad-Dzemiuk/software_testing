@@ -1,3 +1,4 @@
+using MusicPlaylist.Api;
 using MusicPlaylist.Application;
 using MusicPlaylist.Infrastructure;
 
@@ -21,5 +22,7 @@ if (app.Environment.IsDevelopment())
 app.UseHttpsRedirection();
 
 app.MapGet("/health", () => Results.Ok());
+
+app.MapSongEndpoints();
 
 app.Run();
