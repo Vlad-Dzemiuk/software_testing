@@ -7,7 +7,7 @@ builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
 
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(c => c.OperationFilter<PlaylistUserIdHeaderOperationFilter>());
 
 var app = builder.Build();
 
@@ -23,5 +23,6 @@ app.UseHttpsRedirection();
 app.MapGet("/health", () => Results.Ok());
 
 app.MapSongEndpoints();
+app.MapPlaylistEndpoints();
 
 app.Run();

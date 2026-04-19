@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using MusicPlaylist.Application.Playlists;
 using MusicPlaylist.Application.Songs;
 using MusicPlaylist.Infrastructure.Persistence;
 using MusicPlaylist.Infrastructure.Seeding;
@@ -25,6 +26,8 @@ public static class DependencyInjection
         services.AddScoped<SongsRepository>();
         services.AddScoped<ISongsReadRepository>(sp => sp.GetRequiredService<SongsRepository>());
         services.AddScoped<ISongsWriteRepository>(sp => sp.GetRequiredService<SongsRepository>());
+
+        services.AddScoped<IPlaylistRepository, PlaylistRepository>();
 
         services.AddHostedService<DatabaseSeedingHostedService>();
 
