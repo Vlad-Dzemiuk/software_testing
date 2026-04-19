@@ -1,0 +1,8 @@
+<Project>
+  <PropertyGroup>
+    <!-- Fewer flaky MSB3026 retries when another process briefly touches outputs. -->
+    <CopyRetryCount>25</CopyRetryCount>
+    <CopyRetryDelayMilliseconds>300</CopyRetryDelayMilliseconds>
+    <CreateHardLinksForCopyLocalIfPossible>true</CreateHardLinksForCopyLocalIfPossible>
+  </PropertyGroup>
+</Project>

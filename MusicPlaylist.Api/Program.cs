@@ -1,4 +1,3 @@
-using MusicPlaylist.Api;
 using MusicPlaylist.Application;
 using MusicPlaylist.Infrastructure;
 

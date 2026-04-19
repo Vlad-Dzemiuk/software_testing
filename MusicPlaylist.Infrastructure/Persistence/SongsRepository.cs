@@ -1,7 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using MusicPlaylist.Application.Songs;
 using MusicPlaylist.Domain.Entities;
-using Npgsql.EntityFrameworkCore.PostgreSQL;
 
 namespace MusicPlaylist.Infrastructure.Persistence;
 
