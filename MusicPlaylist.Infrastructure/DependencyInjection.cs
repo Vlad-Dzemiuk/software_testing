@@ -1,5 +1,7 @@
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using MusicPlaylist.Infrastructure.Persistence;
 
 namespace MusicPlaylist.Infrastructure;
 
@@ -9,7 +11,15 @@ public static class DependencyInjection
         this IServiceCollection services,
         IConfiguration configuration)
     {
-        // Intentionally empty for now (no EF / external integrations yet).
+        var connectionString = configuration.GetConnectionString("Default");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            throw new InvalidOperationException("Connection string 'Default' is not configured.");
+        }
+
+        services.AddDbContext<AppDbContext>(options =>
+            options.UseNpgsql(connectionString));
+
         return services;
     }
 }
