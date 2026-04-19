@@ -61,4 +61,5 @@ $RECYCLE.BIN/
 # Secrets (don’t commit)
 **/appsettings.*.local.json
 **/secrets.json
+.env
 
