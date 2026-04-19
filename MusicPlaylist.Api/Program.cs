@@ -22,4 +22,6 @@ app.UseHttpsRedirection();
 
 app.MapGet("/health", () => Results.Ok());
 
+app.MapSongEndpoints();
+
 app.Run();

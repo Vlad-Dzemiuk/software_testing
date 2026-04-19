@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using MusicPlaylist.Application.Songs;
 using MusicPlaylist.Infrastructure.Persistence;
 using MusicPlaylist.Infrastructure.Seeding;
 
@@ -20,6 +21,10 @@ public static class DependencyInjection
 
         services.AddDbContext<AppDbContext>(options =>
             options.UseNpgsql(connectionString));
+
+        services.AddScoped<SongsRepository>();
+        services.AddScoped<ISongsReadRepository>(sp => sp.GetRequiredService<SongsRepository>());
+        services.AddScoped<ISongsWriteRepository>(sp => sp.GetRequiredService<SongsRepository>());
 
         services.AddHostedService<DatabaseSeedingHostedService>();
 

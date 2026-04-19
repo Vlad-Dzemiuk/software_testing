@@ -8,6 +8,10 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <Using Include="MusicPlaylist.Api" />
+    </ItemGroup>
+
+    <ItemGroup>
         <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="8.0.26" />
         <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.11">
           <PrivateAssets>all</PrivateAssets>
@@ -20,5 +24,10 @@
       <ProjectReference Include="..\MusicPlaylist.Application\MusicPlaylist.Application.csproj" />
       <ProjectReference Include="..\MusicPlaylist.Infrastructure\MusicPlaylist.Infrastructure.csproj" />
     </ItemGroup>
+
+    <!-- Stops MSB3027 when a debug/run session still holds Api output DLLs (Windows). Skips IDE design-time loads. -->
+    <Target Name="StopMusicPlaylistApiIfRunning" BeforeTargets="PrepareForBuild" Condition="'$(DesignTimeBuild)' != 'true' AND $([MSBuild]::IsOSPlatform('Windows'))">
+        <Exec Command="taskkill /F /IM MusicPlaylist.Api.exe /T 2&gt;nul" IgnoreExitCode="true" />
+    </Target>
 
 </Project>
