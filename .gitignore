@@ -1,0 +1,64 @@
+## .NET / Visual Studio / Rider gitignore
+## Project: MusicPlaylist (net8.0)
+
+# Build results
+**/[Bb]in/
+**/[Oo]bj/
+**/[Dd]ebug*/
+**/[Rr]elease*/
+**/[xX]64/
+**/[xX]86/
+**/[Aa][Rr][Mm]/
+**/[Aa][Rr][Mm]64/
+**/[Ll]og/
+**/[Ll]ogs/
+
+# Visual Studio files
+.vs/
+*.user
+*.rsuser
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Visual Studio cache/options
+*.VC.db
+*.VC.VC.opendb
+
+# MSBuild / NuGet / dotnet artifacts
+*.nuget.props
+*.nuget.targets
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# ASP.NET Core / IIS Express
+.vscode/
+iisexpress/
+*.launchSettings.json
+
+# JetBrains Rider / IntelliJ
+.idea/
+*.sln.iml
+
+# Test results / coverage
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+coverage/
+coverage-results/
+
+# OS
+Thumbs.db
+ehthumbs.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
+
+# Logs
+*.log
+
+# Secrets (don’t commit)
+**/appsettings.*.local.json
+**/secrets.json
+
