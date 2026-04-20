@@ -35,7 +35,7 @@ public sealed class PostgresFixture : IAsyncLifetime
     {
         // Testcontainers can report "started" slightly before Postgres is ready to accept connections.
         // In CI this may cause transient "Connection refused" during EF migrations.
-        var timeoutAt = DateTimeOffset.UtcNow.AddSeconds(30);
+        var timeoutAt = DateTimeOffset.UtcNow.AddSeconds(90);
         Exception? last = null;
 
         while (DateTimeOffset.UtcNow < timeoutAt)
@@ -50,7 +50,7 @@ public sealed class PostgresFixture : IAsyncLifetime
             catch (Exception ex) when (IsTransientStartup(ex))
             {
                 last = ex;
-                await Task.Delay(500);
+                await Task.Delay(750);
             }
         }
 
