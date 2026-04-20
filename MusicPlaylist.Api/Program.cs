@@ -18,9 +18,14 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.UseHttpsRedirection();
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHttpsRedirection();
+}
 
 app.MapSongEndpoints();
 app.MapPlaylistEndpoints();
 
 app.Run();
+
+public partial class Program;
