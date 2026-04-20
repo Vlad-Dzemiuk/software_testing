@@ -258,6 +258,167 @@ public sealed class PlaylistDatabaseConstraintTests
         Assert.Equal(new[] { song1.Id, song3.Id }, links.Select(x => x.SongId).ToArray());
     }
 
+    [Fact]
+    public async Task Db_RestrictDelete_SongReferencedByPlaylistSongs_ThrowsForeignKeyViolation()
+    {
+        using var scope = _fixture.Factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        var playlist = new Playlist
+        {
+            Name = $"p-{Guid.NewGuid():N}",
+            Description = null,
+            UserId = "user-restrict-song",
+            CreatedAt = DateTimeOffset.UtcNow,
+            IsPublic = false
+        };
+
+        var song = new Song
+        {
+            Title = $"t-{Guid.NewGuid():N}",
+            Artist = "a",
+            Album = "al",
+            DurationSeconds = 120,
+            Genre = "Rock",
+            ReleaseDate = new DateOnly(2020, 1, 1)
+        };
+
+        db.Playlists.Add(playlist);
+        db.Songs.Add(song);
+        await db.SaveChangesAsync();
+
+        db.PlaylistSongs.Add(
+            new PlaylistSong
+            {
+                PlaylistId = playlist.Id,
+                SongId = song.Id,
+                Position = 1,
+                AddedAt = DateTimeOffset.UtcNow
+            });
+        await db.SaveChangesAsync();
+
+        // Bypass EF's relationship fixup (conceptual null) and verify the actual DB FK constraint.
+        var pg = await Assert.ThrowsAsync<PostgresException>(
+            () => db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM \"Songs\" WHERE \"Id\" = {song.Id}"));
+        Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, pg.SqlState);
+    }
+
+    [Fact]
+    public async Task Db_DeletePlaylist_DoesNotDeleteSongEntity()
+    {
+        using var scope = _fixture.Factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        var playlist = new Playlist
+        {
+            Name = $"p-{Guid.NewGuid():N}",
+            Description = null,
+            UserId = "user-playlist-delete-keeps-song",
+            CreatedAt = DateTimeOffset.UtcNow,
+            IsPublic = false
+        };
+
+        var song = new Song
+        {
+            Title = $"t-{Guid.NewGuid():N}",
+            Artist = "a",
+            Album = "al",
+            DurationSeconds = 120,
+            Genre = "Rock",
+            ReleaseDate = new DateOnly(2020, 1, 1)
+        };
+
+        db.Playlists.Add(playlist);
+        db.Songs.Add(song);
+        await db.SaveChangesAsync();
+
+        db.PlaylistSongs.Add(
+            new PlaylistSong
+            {
+                PlaylistId = playlist.Id,
+                SongId = song.Id,
+                Position = 1,
+                AddedAt = DateTimeOffset.UtcNow
+            });
+        await db.SaveChangesAsync();
+
+        db.Playlists.Remove(playlist);
+        await db.SaveChangesAsync();
+
+        var songStillExists = await db.Songs.AsNoTracking().AnyAsync(s => s.Id == song.Id);
+        Assert.True(songStillExists);
+    }
+
+    [Fact]
+    public async Task Db_RenumberAfterDeleteFirstViaApi_HasNoPositionGaps()
+    {
+        var userId = "user-db-renumber-first";
+
+        var song1 = await CreateSongAsync("db-f1");
+        var song2 = await CreateSongAsync("db-f2");
+        var song3 = await CreateSongAsync("db-f3");
+
+        var playlist = await CreatePlaylistAsync(userId, "p-db-renumber-first");
+        await AddSongAsync(userId, playlist.Id, song1.Id);
+        await AddSongAsync(userId, playlist.Id, song2.Id);
+        await AddSongAsync(userId, playlist.Id, song3.Id);
+
+        using var delete = new HttpRequestMessage(HttpMethod.Delete, $"/api/playlists/{playlist.Id}/songs/{song1.Id}");
+        delete.Headers.Add("X-User-Id", userId);
+        var resp = await _client.SendAsync(delete);
+        Assert.Equal(HttpStatusCode.NoContent, resp.StatusCode);
+
+        var links = await GetPlaylistLinksAsync(playlist.Id);
+        Assert.Equal(2, links.Count);
+        Assert.Equal(new[] { 1, 2 }, links.Select(x => x.Position).ToArray());
+        Assert.Equal(new[] { song2.Id, song3.Id }, links.Select(x => x.SongId).ToArray());
+    }
+
+    [Fact]
+    public async Task Db_RenumberAfterDeleteLastViaApi_PositionsRemainContiguous()
+    {
+        var userId = "user-db-renumber-last";
+
+        var song1 = await CreateSongAsync("db-l1");
+        var song2 = await CreateSongAsync("db-l2");
+        var song3 = await CreateSongAsync("db-l3");
+
+        var playlist = await CreatePlaylistAsync(userId, "p-db-renumber-last");
+        await AddSongAsync(userId, playlist.Id, song1.Id);
+        await AddSongAsync(userId, playlist.Id, song2.Id);
+        await AddSongAsync(userId, playlist.Id, song3.Id);
+
+        using var delete = new HttpRequestMessage(HttpMethod.Delete, $"/api/playlists/{playlist.Id}/songs/{song3.Id}");
+        delete.Headers.Add("X-User-Id", userId);
+        var resp = await _client.SendAsync(delete);
+        Assert.Equal(HttpStatusCode.NoContent, resp.StatusCode);
+
+        var links = await GetPlaylistLinksAsync(playlist.Id);
+        Assert.Equal(2, links.Count);
+        Assert.Equal(new[] { 1, 2 }, links.Select(x => x.Position).ToArray());
+        Assert.Equal(new[] { song1.Id, song2.Id }, links.Select(x => x.SongId).ToArray());
+    }
+
+    [Fact]
+    public async Task Db_AddSongViaApi_AssignsIncreasingPositions()
+    {
+        var userId = "user-db-add-positions";
+
+        var song1 = await CreateSongAsync("db-a1");
+        var song2 = await CreateSongAsync("db-a2");
+        var song3 = await CreateSongAsync("db-a3");
+
+        var playlist = await CreatePlaylistAsync(userId, "p-db-add-positions");
+        await AddSongAsync(userId, playlist.Id, song1.Id);
+        await AddSongAsync(userId, playlist.Id, song2.Id);
+        await AddSongAsync(userId, playlist.Id, song3.Id);
+
+        var links = await GetPlaylistLinksAsync(playlist.Id);
+        Assert.Equal(3, links.Count);
+        Assert.Equal(new[] { 1, 2, 3 }, links.Select(x => x.Position).ToArray());
+        Assert.Equal(new[] { song1.Id, song2.Id, song3.Id }, links.Select(x => x.SongId).ToArray());
+    }
+
     private async Task<SongResponse> CreateSongAsync(string title)
     {
         var req = new CreateSongRequest(
@@ -294,6 +455,18 @@ public sealed class PlaylistDatabaseConstraintTests
         req.Headers.Add("X-User-Id", userId);
         var resp = await _client.SendAsync(req);
         Assert.Equal(HttpStatusCode.NoContent, resp.StatusCode);
+    }
+
+    private async Task<List<(long SongId, int Position)>> GetPlaylistLinksAsync(long playlistId)
+    {
+        using var scope = _fixture.Factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        return await db.PlaylistSongs
+            .AsNoTracking()
+            .Where(ps => ps.PlaylistId == playlistId)
+            .OrderBy(ps => ps.Position)
+            .Select(ps => new ValueTuple<long, int>(ps.SongId, ps.Position))
+            .ToListAsync();
     }
 
     private static PostgresException? FindPostgresException(Exception ex)
