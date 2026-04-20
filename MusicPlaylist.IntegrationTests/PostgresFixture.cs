@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using MusicPlaylist.Infrastructure.Persistence;
+using Npgsql;
 using Testcontainers.PostgreSql;
 using Xunit;
 
@@ -27,9 +28,48 @@ public sealed class PostgresFixture : IAsyncLifetime
         Factory = new TestAppFactory(ConnectionString);
 
         // Ensure database schema exists (migrations from Infrastructure).
-        using var scope = Factory.Services.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        await db.Database.MigrateAsync();
+        await MigrateWithRetryAsync();
+    }
+
+    private async Task MigrateWithRetryAsync()
+    {
+        // Testcontainers can report "started" slightly before Postgres is ready to accept connections.
+        // In CI this may cause transient "Connection refused" during EF migrations.
+        var timeoutAt = DateTimeOffset.UtcNow.AddSeconds(30);
+        Exception? last = null;
+
+        while (DateTimeOffset.UtcNow < timeoutAt)
+        {
+            try
+            {
+                using var scope = Factory.Services.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                await db.Database.MigrateAsync();
+                return;
+            }
+            catch (Exception ex) when (IsTransientStartup(ex))
+            {
+                last = ex;
+                await Task.Delay(500);
+            }
+        }
+
+        throw new InvalidOperationException("PostgreSQL container did not become ready in time.", last);
+    }
+
+    private static bool IsTransientStartup(Exception ex)
+    {
+        if (ex is NpgsqlException)
+        {
+            return true;
+        }
+
+        if (ex is AggregateException ag && ag.InnerExceptions.Any(IsTransientStartup))
+        {
+            return true;
+        }
+
+        return ex.InnerException is not null && IsTransientStartup(ex.InnerException);
     }
 
     public async Task DisposeAsync()
