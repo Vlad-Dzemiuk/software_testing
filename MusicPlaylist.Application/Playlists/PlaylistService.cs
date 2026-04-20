@@ -103,8 +103,41 @@ public sealed class PlaylistService : IPlaylistService
         string userId,
         long playlistId,
         AddSongToPlaylistRequest request,
-        CancellationToken cancellationToken = default) =>
-        _repository.AddSongTransactionalAsync(playlistId, userId, request.SongId, cancellationToken);
+        CancellationToken cancellationToken = default)
+    {
+        return AddSongInternalAsync(userId, playlistId, request, cancellationToken);
+    }
+
+    private async Task<ServiceError?> AddSongInternalAsync(
+        string userId,
+        long playlistId,
+        AddSongToPlaylistRequest request,
+        CancellationToken cancellationToken)
+    {
+        var playlist = await _repository.GetOwnedTrackedAsync(playlistId, userId, true, cancellationToken);
+        if (playlist is null)
+        {
+            return ServiceError.NotFound("Playlist was not found.");
+        }
+
+        var songId = request.SongId;
+        if (!await _repository.SongExistsAsync(songId, cancellationToken))
+        {
+            return ServiceError.NotFound("Song was not found.");
+        }
+
+        if (playlist.PlaylistSongs.Any(ps => ps.SongId == songId))
+        {
+            return ServiceError.Conflict("This song is already in the playlist.");
+        }
+
+        if (playlist.PlaylistSongs.Count >= PlaylistRules.MaxSongsPerPlaylist)
+        {
+            return ServiceError.BadRequest("Playlist has reached the maximum of 100 songs.");
+        }
+
+        return await _repository.AddSongTransactionalAsync(playlistId, userId, songId, cancellationToken);
+    }
 
     public Task<ServiceError?> RemoveSongAsync(
         string userId,
@@ -122,7 +155,7 @@ public sealed class PlaylistService : IPlaylistService
         var items = request.Items;
         if (items is null)
         {
-            return ServiceError.BadRequest("Items is required.");
+            return ServiceError.BadRequest("Items are required.");
         }
 
         return await _repository.ReorderTransactionalAsync(playlistId, userId, items, cancellationToken);
