@@ -256,33 +256,12 @@ public sealed class PlaylistRepository : IPlaylistRepository
 
                 var links = playlist.PlaylistSongs.OrderBy(x => x.Position).ToList();
                 var n = links.Count;
-                if (items.Count != n)
-                {
-                    await tx.RollbackAsync(ct);
-                    return ServiceError.BadRequest($"Items must contain exactly {n} entries.");
-                }
-
-                if (items.Select(i => i.SongId).Distinct().Count() != items.Count)
-                {
-                    await tx.RollbackAsync(ct);
-                    return ServiceError.BadRequest("Duplicate songId in items.");
-                }
-
                 var dbIds = links.Select(l => l.SongId).ToHashSet();
-                var reqIds = items.Select(i => i.SongId).ToHashSet();
-                if (!dbIds.SetEquals(reqIds))
+                var validationError = PlaylistReorderValidator.Validate(items, dbIds);
+                if (validationError is not null)
                 {
                     await tx.RollbackAsync(ct);
-                    return ServiceError.BadRequest("Items must reference exactly the songs in this playlist.");
-                }
-
-                var positions = items.Select(i => i.Position).ToList();
-                var distinctPos = new HashSet<int>(positions);
-                if (distinctPos.Count != n || positions.Any(p => p < 1 || p > n))
-                {
-                    await tx.RollbackAsync(ct);
-                    return ServiceError.BadRequest(
-                        "Positions must be a permutation of 1 through N with no duplicates.");
+                    return validationError;
                 }
 
                 for (var i = 0; i < n; i++)
