@@ -85,6 +85,98 @@ public class PlaylistServiceRulesTests
         repo.Verify(
             r => r.AddSongTransactionalAsync(It.IsAny<long>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<CancellationToken>()),
             Times.Never);
+
+        repo.Verify(r => r.SongExistsAsync(songId, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task AddSongAsync_WhenPlaylistNotFound_ReturnsNotFound_AndDoesNotCallRepositorySongChecksOrAdd()
+    {
+        var userId = _fixture.Create<string>();
+        var playlistId = _fixture.Create<long>();
+        var songId = _fixture.Create<long>();
+
+        var repo = new Mock<IPlaylistRepository>(MockBehavior.Strict);
+        repo.Setup(r => r.GetOwnedTrackedAsync(playlistId, userId, true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Playlist?)null);
+
+        var service = new PlaylistService(repo.Object);
+
+        var error = await service.AddSongAsync(userId, playlistId, new AddSongToPlaylistRequest(songId));
+
+        Assert.NotNull(error);
+        Assert.Contains("Playlist was not found", error!.Message);
+        repo.Verify(r => r.SongExistsAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()), Times.Never);
+        repo.Verify(
+            r => r.AddSongTransactionalAsync(It.IsAny<long>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task AddSongAsync_WhenSongDoesNotExist_ReturnsNotFound_AndDoesNotCallRepositoryAdd()
+    {
+        var userId = _fixture.Create<string>();
+        var playlistId = _fixture.Create<long>();
+        var songId = _fixture.Create<long>();
+
+        var playlist = new Playlist
+        {
+            Id = playlistId,
+            UserId = userId,
+            Name = _fixture.Create<string>(),
+            CreatedAt = DateTimeOffset.UtcNow,
+            IsPublic = false,
+            PlaylistSongs = new List<PlaylistSong>()
+        };
+
+        var repo = new Mock<IPlaylistRepository>(MockBehavior.Strict);
+        repo.Setup(r => r.GetOwnedTrackedAsync(playlistId, userId, true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(playlist);
+        repo.Setup(r => r.SongExistsAsync(songId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+
+        var service = new PlaylistService(repo.Object);
+
+        var error = await service.AddSongAsync(userId, playlistId, new AddSongToPlaylistRequest(songId));
+
+        Assert.NotNull(error);
+        Assert.Contains("Song was not found", error!.Message);
+        repo.Verify(
+            r => r.AddSongTransactionalAsync(It.IsAny<long>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task AddSongAsync_WhenRulesPass_CallsRepositoryAdd_WithCorrectArgs()
+    {
+        var userId = _fixture.Create<string>();
+        var playlistId = _fixture.Create<long>();
+        var songId = _fixture.Create<long>();
+
+        var playlist = new Playlist
+        {
+            Id = playlistId,
+            UserId = userId,
+            Name = _fixture.Create<string>(),
+            CreatedAt = DateTimeOffset.UtcNow,
+            IsPublic = false,
+            PlaylistSongs = new List<PlaylistSong>()
+        };
+
+        var repo = new Mock<IPlaylistRepository>(MockBehavior.Strict);
+        repo.Setup(r => r.GetOwnedTrackedAsync(playlistId, userId, true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(playlist);
+        repo.Setup(r => r.SongExistsAsync(songId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        repo.Setup(r => r.AddSongTransactionalAsync(playlistId, userId, songId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((MusicPlaylist.Application.Common.ServiceError?)null);
+
+        var service = new PlaylistService(repo.Object);
+
+        var error = await service.AddSongAsync(userId, playlistId, new AddSongToPlaylistRequest(songId));
+
+        Assert.Null(error);
+        repo.Verify(r => r.AddSongTransactionalAsync(playlistId, userId, songId, It.IsAny<CancellationToken>()), Times.Once);
     }
 }
 

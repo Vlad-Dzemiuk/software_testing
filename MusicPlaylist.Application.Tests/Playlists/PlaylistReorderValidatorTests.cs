@@ -104,5 +104,50 @@ public class PlaylistReorderValidatorTests
         Assert.NotNull(error);
         Assert.Contains("Duplicate songId", error!.Message);
     }
+
+    [Fact]
+    public void Validate_PositionBelowOne_ReturnsBadRequest()
+    {
+        var existing = new HashSet<long> { 10, 20, 30 };
+        var items = new[]
+        {
+            new ReorderItem(10, 0),
+            new ReorderItem(20, 1),
+            new ReorderItem(30, 2)
+        };
+
+        var error = PlaylistReorderValidator.Validate(items, existing);
+
+        Assert.NotNull(error);
+        Assert.Contains("Positions must be a permutation", error!.Message);
+    }
+
+    [Fact]
+    public void Validate_PositionAboveN_ReturnsBadRequest()
+    {
+        var existing = new HashSet<long> { 10, 20, 30 };
+        var items = new[]
+        {
+            new ReorderItem(10, 1),
+            new ReorderItem(20, 2),
+            new ReorderItem(30, 4)
+        };
+
+        var error = PlaylistReorderValidator.Validate(items, existing);
+
+        Assert.NotNull(error);
+        Assert.Contains("Positions must be a permutation", error!.Message);
+    }
+
+    [Fact]
+    public void Validate_EmptyPlaylist_EmptyItems_ReturnsNull()
+    {
+        var existing = new HashSet<long>();
+        var items = Array.Empty<ReorderItem>();
+
+        var error = PlaylistReorderValidator.Validate(items, existing);
+
+        Assert.Null(error);
+    }
 }
 
