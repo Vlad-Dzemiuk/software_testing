@@ -1,5 +1,6 @@
 using System.Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using MusicPlaylist.Application.Common;
 using MusicPlaylist.Application.Playlists;
 using MusicPlaylist.Domain.Entities;
@@ -123,26 +124,26 @@ public sealed class PlaylistRepository : IPlaylistRepository
                     .FirstOrDefaultAsync(p => p.Id == playlistId && p.UserId == userId, ct);
                 if (playlist is null)
                 {
-                    await tx.RollbackAsync(ct);
+                    await SafeRollbackAsync(tx, ct);
                     return ServiceError.NotFound("Playlist was not found.");
                 }
 
                 if (!await _db.Songs.AnyAsync(s => s.Id == songId, ct))
                 {
-                    await tx.RollbackAsync(ct);
+                    await SafeRollbackAsync(tx, ct);
                     return ServiceError.NotFound("Song was not found.");
                 }
 
                 if (playlist.PlaylistSongs.Any(ps => ps.SongId == songId))
                 {
-                    await tx.RollbackAsync(ct);
+                    await SafeRollbackAsync(tx, ct);
                     return ServiceError.Conflict("This song is already in the playlist.");
                 }
 
                 var count = await _db.PlaylistSongs.CountAsync(ps => ps.PlaylistId == playlistId, ct);
                 if (count >= PlaylistRules.MaxSongsPerPlaylist)
                 {
-                    await tx.RollbackAsync(ct);
+                    await SafeRollbackAsync(tx, ct);
                     return ServiceError.BadRequest("Playlist has reached the maximum of 100 songs.");
                 }
 
@@ -166,12 +167,12 @@ public sealed class PlaylistRepository : IPlaylistRepository
                 }
                 catch (DbUpdateException ex) when (IsUniqueIndex(ex, PlaylistSongsPlaylistSongIndex))
                 {
-                    await tx.RollbackAsync(ct);
+                    await SafeRollbackAsync(tx, ct);
                     return ServiceError.Conflict("This song is already in the playlist.");
                 }
                 catch (DbUpdateException ex) when (IsUniqueIndex(ex, PlaylistSongsPlaylistPositionIndex))
                 {
-                    await tx.RollbackAsync(ct);
+                    await SafeRollbackAsync(tx, ct);
                     return ServiceError.BadRequest("Playlist has reached the maximum of 100 songs.");
                 }
 
@@ -180,113 +181,189 @@ public sealed class PlaylistRepository : IPlaylistRepository
             }
             catch
             {
-                await tx.RollbackAsync(ct);
+                await SafeRollbackAsync(tx, ct);
                 throw;
             }
         }, cancellationToken);
 
-    public Task<ServiceError?> RemoveSongAndRenumberAsync(
+    public async Task<ServiceError?> RemoveSongAndRenumberAsync(
         long playlistId,
         string userId,
         long songId,
-        CancellationToken cancellationToken = default) =>
-        _db.Database.CreateExecutionStrategy().ExecuteAsync<ServiceError?>(async ct =>
+        CancellationToken cancellationToken = default)
+    {
+        try
         {
-            await using var tx = await _db.Database.BeginTransactionAsync(ct);
-            try
+            return await _db.Database.CreateExecutionStrategy().ExecuteAsync<ServiceError?>(async ct =>
             {
-                var playlist = await _db.Playlists
-                    .Include(p => p.PlaylistSongs)
-                    .FirstOrDefaultAsync(p => p.Id == playlistId && p.UserId == userId, ct);
-                if (playlist is null)
+                await using var tx = await _db.Database.BeginTransactionAsync(ct);
+                try
                 {
-                    await tx.RollbackAsync(ct);
-                    return ServiceError.NotFound("Playlist was not found.");
-                }
+                    var playlist = await _db.Playlists
+                        .Include(p => p.PlaylistSongs)
+                        .FirstOrDefaultAsync(p => p.Id == playlistId && p.UserId == userId, ct);
+                    if (playlist is null)
+                    {
+                        await SafeRollbackAsync(tx, ct);
+                        return ServiceError.NotFound("Playlist was not found.");
+                    }
 
-                var link = playlist.PlaylistSongs.FirstOrDefault(ps => ps.SongId == songId);
-                if (link is null)
+                    var link = playlist.PlaylistSongs.FirstOrDefault(ps => ps.SongId == songId);
+                    if (link is null)
+                    {
+                        await SafeRollbackAsync(tx, ct);
+                        return ServiceError.NotFound("Song was not found in this playlist.");
+                    }
+
+                    _db.PlaylistSongs.Remove(link);
+                    await _db.SaveChangesAsync(ct);
+
+                    var remaining = await _db.PlaylistSongs
+                        .Where(ps => ps.PlaylistId == playlistId)
+                        .OrderBy(ps => ps.Position)
+                        .ToListAsync(ct);
+                    for (var i = 0; i < remaining.Count; i++)
+                    {
+                        remaining[i].Position = i + 1;
+                    }
+
+                    await _db.SaveChangesAsync(ct);
+                    await tx.CommitAsync(ct);
+                    return null;
+                }
+                catch (DbUpdateException ex) when (TryPostgresException(ex, out var pg)
+                                                  && pg is not null
+                                                  && (pg.SqlState == PostgresErrorCodes.SerializationFailure
+                                                      || pg.SqlState == PostgresErrorCodes.DeadlockDetected))
                 {
-                    await tx.RollbackAsync(ct);
-                    return ServiceError.NotFound("Song was not found in this playlist.");
+                    await SafeRollbackAsync(tx, ct);
+                    return ServiceError.Conflict("Concurrent reorder detected. Please retry.");
                 }
-
-                _db.PlaylistSongs.Remove(link);
-                await _db.SaveChangesAsync(ct);
-
-                var remaining = await _db.PlaylistSongs
-                    .Where(ps => ps.PlaylistId == playlistId)
-                    .OrderBy(ps => ps.Position)
-                    .ToListAsync(ct);
-                for (var i = 0; i < remaining.Count; i++)
+                catch (PostgresException pg) when (pg.SqlState == PostgresErrorCodes.SerializationFailure
+                                                   || pg.SqlState == PostgresErrorCodes.DeadlockDetected)
                 {
-                    remaining[i].Position = i + 1;
+                    await SafeRollbackAsync(tx, ct);
+                    return ServiceError.Conflict("Concurrent reorder detected. Please retry.");
                 }
+                catch (InvalidOperationException ex) when (TryFindPostgresSqlState(ex, out var sqlState)
+                                                          && (sqlState == PostgresErrorCodes.SerializationFailure
+                                                              || sqlState == PostgresErrorCodes.DeadlockDetected))
+                {
+                    await SafeRollbackAsync(tx, ct);
+                    return ServiceError.Conflict("Concurrent reorder detected. Please retry.");
+                }
+                catch
+                {
+                    await SafeRollbackAsync(tx, ct);
+                    throw;
+                }
+            }, cancellationToken);
+        }
+        catch (RetryLimitExceededException ex) when (TryFindPostgresSqlState(ex, out var sqlState)
+                                                    && (sqlState == PostgresErrorCodes.SerializationFailure
+                                                        || sqlState == PostgresErrorCodes.DeadlockDetected))
+        {
+            return ServiceError.Conflict("Concurrent reorder detected. Please retry.");
+        }
+        catch (Exception ex) when (TryFindPostgresSqlState(ex, out var sqlState)
+                                  && (sqlState == PostgresErrorCodes.SerializationFailure
+                                      || sqlState == PostgresErrorCodes.DeadlockDetected))
+        {
+            return ServiceError.Conflict("Concurrent reorder detected. Please retry.");
+        }
+    }
 
-                await _db.SaveChangesAsync(ct);
-                await tx.CommitAsync(ct);
-                return null;
-            }
-            catch
-            {
-                await tx.RollbackAsync(ct);
-                throw;
-            }
-        }, cancellationToken);
-
-    public Task<ServiceError?> ReorderTransactionalAsync(
+    public async Task<ServiceError?> ReorderTransactionalAsync(
         long playlistId,
         string userId,
         IReadOnlyList<ReorderItem> items,
-        CancellationToken cancellationToken = default) =>
-        _db.Database.CreateExecutionStrategy().ExecuteAsync<ServiceError?>(async ct =>
+        CancellationToken cancellationToken = default)
+    {
+        try
         {
-            await using var tx =
-                await _db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
-            try
+            return await _db.Database.CreateExecutionStrategy().ExecuteAsync<ServiceError?>(async ct =>
             {
-                var playlist = await _db.Playlists
-                    .Include(p => p.PlaylistSongs)
-                    .FirstOrDefaultAsync(p => p.Id == playlistId && p.UserId == userId, ct);
-                if (playlist is null)
+                await using var tx =
+                    await _db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
+                try
                 {
-                    await tx.RollbackAsync(ct);
-                    return ServiceError.NotFound("Playlist was not found.");
-                }
+                    var playlist = await _db.Playlists
+                        .Include(p => p.PlaylistSongs)
+                        .FirstOrDefaultAsync(p => p.Id == playlistId && p.UserId == userId, ct);
+                    if (playlist is null)
+                    {
+                        await SafeRollbackAsync(tx, ct);
+                        return ServiceError.NotFound("Playlist was not found.");
+                    }
 
-                var links = playlist.PlaylistSongs.OrderBy(x => x.Position).ToList();
-                var n = links.Count;
-                var dbIds = links.Select(l => l.SongId).ToHashSet();
-                var validationError = PlaylistReorderValidator.Validate(items, dbIds);
-                if (validationError is not null)
+                    var links = playlist.PlaylistSongs.OrderBy(x => x.Position).ToList();
+                    var n = links.Count;
+                    var dbIds = links.Select(l => l.SongId).ToHashSet();
+                    var validationError = PlaylistReorderValidator.Validate(items, dbIds);
+                    if (validationError is not null)
+                    {
+                        await SafeRollbackAsync(tx, ct);
+                        return validationError;
+                    }
+
+                    for (var i = 0; i < n; i++)
+                    {
+                        links[i].Position = 1_000_000 + i;
+                    }
+
+                    await _db.SaveChangesAsync(ct);
+
+                    foreach (var item in items)
+                    {
+                        var link = links.First(l => l.SongId == item.SongId);
+                        link.Position = item.Position;
+                    }
+
+                    await _db.SaveChangesAsync(ct);
+                    await tx.CommitAsync(ct);
+                    return null;
+                }
+                catch (DbUpdateException ex) when (TryPostgresException(ex, out var pg)
+                                                  && pg is not null
+                                                  && (pg.SqlState == PostgresErrorCodes.SerializationFailure
+                                                      || pg.SqlState == PostgresErrorCodes.DeadlockDetected))
                 {
-                    await tx.RollbackAsync(ct);
-                    return validationError;
+                    await SafeRollbackAsync(tx, ct);
+                    return ServiceError.Conflict("Concurrent reorder detected. Please retry.");
                 }
-
-                for (var i = 0; i < n; i++)
+                catch (PostgresException pg) when (pg.SqlState == PostgresErrorCodes.SerializationFailure
+                                                   || pg.SqlState == PostgresErrorCodes.DeadlockDetected)
                 {
-                    links[i].Position = 1_000_000 + i;
+                    await SafeRollbackAsync(tx, ct);
+                    return ServiceError.Conflict("Concurrent reorder detected. Please retry.");
                 }
-
-                await _db.SaveChangesAsync(ct);
-
-                foreach (var item in items)
+                catch (InvalidOperationException ex) when (TryFindPostgresSqlState(ex, out var sqlState)
+                                                          && (sqlState == PostgresErrorCodes.SerializationFailure
+                                                              || sqlState == PostgresErrorCodes.DeadlockDetected))
                 {
-                    var link = links.First(l => l.SongId == item.SongId);
-                    link.Position = item.Position;
+                    await SafeRollbackAsync(tx, ct);
+                    return ServiceError.Conflict("Concurrent reorder detected. Please retry.");
                 }
-
-                await _db.SaveChangesAsync(ct);
-                await tx.CommitAsync(ct);
-                return null;
-            }
-            catch
-            {
-                await tx.RollbackAsync(ct);
-                throw;
-            }
-        }, cancellationToken);
+                catch
+                {
+                    await SafeRollbackAsync(tx, ct);
+                    throw;
+                }
+            }, cancellationToken);
+        }
+        catch (RetryLimitExceededException ex) when (TryFindPostgresSqlState(ex, out var sqlState)
+                                                    && (sqlState == PostgresErrorCodes.SerializationFailure
+                                                        || sqlState == PostgresErrorCodes.DeadlockDetected))
+        {
+            return ServiceError.Conflict("Concurrent reorder detected. Please retry.");
+        }
+        catch (Exception ex) when (TryFindPostgresSqlState(ex, out var sqlState)
+                                  && (sqlState == PostgresErrorCodes.SerializationFailure
+                                      || sqlState == PostgresErrorCodes.DeadlockDetected))
+        {
+            return ServiceError.Conflict("Concurrent reorder detected. Please retry.");
+        }
+    }
 
     private static bool IsUniqueIndex(DbUpdateException ex, string indexName)
     {
@@ -320,5 +397,44 @@ public sealed class PlaylistRepository : IPlaylistRepository
 
         postgresException = null;
         return false;
+    }
+
+    private static bool TryFindPostgresSqlState(Exception ex, out string? sqlState)
+    {
+        if (ex is PostgresException pg)
+        {
+            sqlState = pg.SqlState;
+            return true;
+        }
+
+        if (ex is DbUpdateException db && TryPostgresException(db, out var pg2) && pg2 is not null)
+        {
+            sqlState = pg2.SqlState;
+            return true;
+        }
+
+        if (ex.InnerException is null)
+        {
+            sqlState = null;
+            return false;
+        }
+
+        return TryFindPostgresSqlState(ex.InnerException, out sqlState);
+    }
+
+    private static async Task SafeRollbackAsync(IDbContextTransaction tx, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await tx.RollbackAsync(cancellationToken);
+        }
+        catch (ObjectDisposedException)
+        {
+            // Transaction already disposed; nothing to rollback.
+        }
+        catch (InvalidOperationException)
+        {
+            // Transaction already completed/aborted; nothing to rollback.
+        }
     }
 }
